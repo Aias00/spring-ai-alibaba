@@ -22,7 +22,7 @@ on:
 
 jobs:
   actbot:
-    if: (github.repository == 'aias00/spring-ai-alibaba')
+    if: (github.repository == 'Aias00/spring-ai-alibaba')
     runs-on: ubuntu-22.04
     permissions:
       pull-requests: write
