@@ -15,7 +15,6 @@
  */
 package com.alibaba.cloud.ai.example.manus.planning.controller;
 
-import com.alibaba.cloud.ai.example.manus.observation.JmanusObservationConvention;
 import com.alibaba.cloud.ai.example.manus.planning.PlanningFactory;
 import com.alibaba.cloud.ai.example.manus.planning.coordinator.PlanIdDispatcher;
 import com.alibaba.cloud.ai.example.manus.planning.coordinator.PlanningCoordinator;
@@ -27,28 +26,22 @@ import com.alibaba.cloud.ai.example.manus.recorder.entity.PlanExecutionRecord;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
+import io.micrometer.observation.Observation;
+import com.alibaba.cloud.ai.example.manus.observation.JmanusPlanObservationContext;
+import com.alibaba.cloud.ai.example.manus.observation.JmanusObservationConvention;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.observation.ChatModelObservationDocumentation;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-
-import com.alibaba.cloud.ai.example.manus.observation.JmanusPlanObservationContext;
 
 @RestController
 @RequestMapping("/api/executor")
@@ -74,8 +67,6 @@ public class ManusController {
 	@Autowired
 	private ObservationRegistry observationRegistry;
 
-	private static final JmanusObservationConvention DEFAULT_OBSERVATION_CONVENTION = new JmanusObservationConvention();
-
 	@Autowired
 	public ManusController(ObjectMapper objectMapper) {
 		this.objectMapper = objectMapper;
@@ -99,32 +90,40 @@ public class ManusController {
 		}
 		ExecutionContext context = new ExecutionContext();
 		context.setUserRequest(query);
+		// Use PlanIdDispatcher to generate a unique plan ID
 		String planId = planIdDispatcher.generatePlanId();
 		context.setPlanId(planId);
 		context.setNeedSummary(true);
+		// Get or create planning flow
+		PlanningCoordinator planningFlow = planningFactory.createPlanningCoordinator(planId);
 
-		// Micrometer观测性埋点，使用JmanusPlanObservationContext
-		JmanusPlanObservationContext obsContext = new JmanusPlanObservationContext(context);
-		Observation observation = Observation.createNotStarted("jmanus.plan.execution", obsContext, observationRegistry)
+		// Micrometer 观测性埋点
+		Observation observation = Observation.createNotStarted("jmanus.plan.execution", observationRegistry)
 				.observationConvention(new JmanusObservationConvention());
-		try (Observation.Scope scope = observation.openScope()) {
-			PlanningCoordinator planningFlow = planningFactory.createPlanningCoordinator(planId);
-			CompletableFuture.supplyAsync(() -> {
-				try {
-					ExecutionContext result = planningFlow.executePlan(context);
-					return result;
-				} catch (Exception e) {
-					logger.error("Failed to execute plan", e);
-					throw new RuntimeException("Failed to execute plan: " + e.getMessage(), e);
-				}
-			});
-			observation.stop();
-		}
+		observation.contextualName("planId:" + context.getPlanId());
+		// 可通过 observation.lowCardinalityKeyValue("planId", context.getPlanId()) 等方式补充标签
 
+		// Asynchronous execution of task
+		CompletableFuture.supplyAsync(() -> {
+			try (Observation.Scope scope = observation.openScope()) {
+				observation.start();
+				ExecutionContext result = planningFlow.executePlan(context);
+				return result;
+			} catch (Exception e) {
+				observation.error(e);
+				logger.error("Failed to execute plan", e);
+				throw new RuntimeException("Failed to execute plan: " + e.getMessage(), e);
+			} finally {
+				observation.stop();
+			}
+		});
+
+		// Return task ID and initial status
 		Map<String, Object> response = new HashMap<>();
 		response.put("planId", planId);
 		response.put("status", "processing");
 		response.put("message", "任务已提交，正在处理中");
+
 		return ResponseEntity.ok(response);
 	}
 
