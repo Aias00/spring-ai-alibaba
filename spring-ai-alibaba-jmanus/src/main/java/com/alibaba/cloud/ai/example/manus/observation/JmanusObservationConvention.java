@@ -1,5 +1,6 @@
 package com.alibaba.cloud.ai.example.manus.observation;
 
+import com.google.gson.Gson;
 import io.micrometer.common.KeyValue;
 import io.micrometer.common.KeyValues;
 import io.micrometer.observation.Observation;
@@ -23,8 +24,10 @@ public class JmanusObservationConvention implements ObservationConvention<Jmanus
 
   @Override
   public KeyValues getLowCardinalityKeyValues(JmanusPlanObservationContext context) {
+    Gson gson = new Gson();
     return KeyValues.of(
         KeyValue.of("planId", context.getExecutionContext().getPlanId()),
+        KeyValue.of("context", gson.toJson(context.getExecutionContext())),
         KeyValue.of("userId", "unknown"));
   }
 
