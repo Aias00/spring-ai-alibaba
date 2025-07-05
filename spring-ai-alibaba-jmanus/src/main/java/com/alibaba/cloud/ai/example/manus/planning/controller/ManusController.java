@@ -28,7 +28,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.micrometer.observation.ObservationRegistry;
 import io.micrometer.observation.Observation;
-import com.alibaba.cloud.ai.example.manus.observation.JmanusPlanObservationContext;
 import com.alibaba.cloud.ai.example.manus.observation.JmanusObservationConvention;
 
 import org.slf4j.Logger;
@@ -90,40 +89,38 @@ public class ManusController {
 		}
 		ExecutionContext context = new ExecutionContext();
 		context.setUserRequest(query);
-		// Use PlanIdDispatcher to generate a unique plan ID
 		String planId = planIdDispatcher.generatePlanId();
 		context.setPlanId(planId);
 		context.setNeedSummary(true);
-		// Get or create planning flow
 		PlanningCoordinator planningFlow = planningFactory.createPlanningCoordinator(planId);
 
-		// Micrometer 观测性埋点
-		Observation observation = Observation.createNotStarted("jmanus.plan.execution", observationRegistry)
-				.observationConvention(new JmanusObservationConvention());
-		observation.contextualName("planId:" + context.getPlanId());
-		// 可通过 observation.lowCardinalityKeyValue("planId", context.getPlanId()) 等方式补充标签
+		// 获取当前 HTTP 请求的 Observation 作为 parent
+		Observation parentObservation = observationRegistry.getCurrentObservation();
 
-		// Asynchronous execution of task
 		CompletableFuture.supplyAsync(() -> {
-			try (Observation.Scope scope = observation.openScope()) {
-				observation.start();
+			Observation planObservation = Observation.createNotStarted("jmanus.plan.execution", observationRegistry)
+					.observationConvention(new JmanusObservationConvention())
+					.contextualName("planId:" + context.getPlanId());
+			if (parentObservation != null) {
+				planObservation.parentObservation(parentObservation);
+			}
+			try (Observation.Scope scope = planObservation.openScope()) {
+				planObservation.start();
 				ExecutionContext result = planningFlow.executePlan(context);
 				return result;
 			} catch (Exception e) {
-				observation.error(e);
+				planObservation.error(e);
 				logger.error("Failed to execute plan", e);
 				throw new RuntimeException("Failed to execute plan: " + e.getMessage(), e);
 			} finally {
-				observation.stop();
+				planObservation.stop();
 			}
 		});
 
-		// Return task ID and initial status
 		Map<String, Object> response = new HashMap<>();
 		response.put("planId", planId);
 		response.put("status", "processing");
 		response.put("message", "任务已提交，正在处理中");
-
 		return ResponseEntity.ok(response);
 	}
 
