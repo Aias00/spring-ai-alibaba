@@ -99,8 +99,7 @@ public class ManusController {
 
 		CompletableFuture.supplyAsync(() -> {
 			Observation planObservation = Observation.createNotStarted("jmanus.plan.execution", observationRegistry)
-					.observationConvention(new JmanusObservationConvention())
-					.contextualName("planId:" + context.getPlanId());
+					.observationConvention(new JmanusObservationConvention());
 			if (parentObservation != null) {
 				planObservation.parentObservation(parentObservation);
 			}
@@ -132,32 +131,41 @@ public class ManusController {
 	 */
 	@GetMapping("/details/{planId}")
 	public synchronized ResponseEntity<?> getExecutionDetails(@PathVariable("planId") String planId) {
-		PlanExecutionRecord planRecord = planExecutionRecorder.getExecutionRecord(planId);
-
-		if (planRecord == null) {
-			return ResponseEntity.notFound().build();
+		// Micrometer 观测性埋点
+		Observation parentObservation = observationRegistry.getCurrentObservation();
+		Observation detailsObservation = Observation.createNotStarted("jmanus.plan.details", observationRegistry)
+				.observationConvention(new JmanusObservationConvention())
+				.contextualName("planId:" + planId);
+		if (parentObservation != null) {
+			detailsObservation.parentObservation(parentObservation);
 		}
+		try (Observation.Scope scope = detailsObservation.openScope()) {
+			detailsObservation.start();
 
-		// Check for user input wait state and merge it into the plan record
-		UserInputWaitState waitState = userInputService.getWaitState(planId);
-		if (waitState != null && waitState.isWaiting()) {
-			// Assuming PlanExecutionRecord has a method like setUserInputWaitState
-			// You will need to add this field and method to your PlanExecutionRecord
-			// class
-			planRecord.setUserInputWaitState(waitState);
-			logger.info("Plan {} is waiting for user input. Merged waitState into details response.", planId);
-		} else {
-			planRecord.setUserInputWaitState(null); // Clear if not waiting
-		}
+			PlanExecutionRecord planRecord = planExecutionRecorder.getExecutionRecord(planId);
+			if (planRecord == null) {
+				return ResponseEntity.notFound().build();
+			}
 
-		try {
-			// Use Jackson ObjectMapper to convert object to JSON string
-			String jsonResponse = objectMapper.writeValueAsString(planRecord);
-			return ResponseEntity.ok(jsonResponse);
-		} catch (JsonProcessingException e) {
-			logger.error("Error serializing PlanExecutionRecord to JSON for planId: {}", planId, e);
-			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-					.body("Error processing request: " + e.getMessage());
+			// Check for user input wait state and merge it into the plan record
+			UserInputWaitState waitState = userInputService.getWaitState(planId);
+			if (waitState != null && waitState.isWaiting()) {
+				planRecord.setUserInputWaitState(waitState);
+				logger.info("Plan {} is waiting for user input. Merged waitState into details response.", planId);
+			} else {
+				planRecord.setUserInputWaitState(null); // Clear if not waiting
+			}
+
+			try {
+				String jsonResponse = objectMapper.writeValueAsString(planRecord);
+				return ResponseEntity.ok(jsonResponse);
+			} catch (JsonProcessingException e) {
+				logger.error("Error serializing PlanExecutionRecord to JSON for planId: {}", planId, e);
+				return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+						.body("Error processing request: " + e.getMessage());
+			}
+		} finally {
+			detailsObservation.stop();
 		}
 	}
 
