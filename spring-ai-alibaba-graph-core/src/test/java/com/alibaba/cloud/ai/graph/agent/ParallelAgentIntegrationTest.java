@@ -120,7 +120,7 @@ class ParallelAgentIntegrationTest {
 
 			// Verify topic was set (from TransparentNode)
 			assertTrue(finalState.value("topic").isPresent(), "Topic should be set");
-//			assertEquals(userRequest, finalState.value("topic").get());
+			// assertEquals(userRequest, finalState.value("topic").get());
 
 			// Verify all sub-agents produced results
 			assertTrue(finalState.value("prose_result").isPresent(), "Prose result should be present");
